@@ -29,7 +29,7 @@ browser :8080 → nginx (frontend) ──/api/ proxy──> backend :3000 → Op
                                                           └── pgvector (db service, PostgreSQL) for RAG chunk storage/search
 ```
 
-- **frontend/** — Angular 21, single standalone component (`app.component.ts`) using signals. Posts to the relative path `/api/chat`. Built to static files and served by nginx (`nginx.conf`), which proxies `/api/` to `backend:3000`. The frontend never talks to the model directly.
+- **frontend/** — Angular 21, single standalone component (`app.component.ts`) using signals. Posts questions to `/api/chat`, and manages knowledge docs via `/api/documents` (lists on load, uploads files, deletes by source). Built to static files and served by nginx (`nginx.conf`), which proxies `/api/` to `backend:3000`. The frontend never talks to the model directly.
 - **backend/** — NestJS 11. `AppController`: `GET /api/message` (static placeholder) and `POST /api/chat` (`{ "message": string }` → `{ "message": string }`). `DocumentsController` (in `RagModule`): `GET /api/documents` (list sources), `POST /api/documents` (multipart `file`, `.md`/`.txt`, runtime ingest), `DELETE /api/documents/:source`. CORS is enabled and the server binds `0.0.0.0:3000` (`main.ts`). The RAG layer lives in `backend/src/rag/` (`RagModule`), imported by `AppModule`.
 
 ### Backend LLM call — important details

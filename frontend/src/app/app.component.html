@@ -3,7 +3,8 @@
     <p class="label">Local LLM Chat</p>
     <h1 id="page-title">RAG Chatbot Practice</h1>
     <p class="description">
-      まずは LM Studio などの OpenAI-compatible API に質問を送り、応答を返す段階です。
+      質問すると、登録済みの文書を検索して回答します（RAG）。文書はローカルの LM Studio などの
+      OpenAI-compatible API で埋め込み・生成します。
     </p>
     <label class="field" for="prompt">質問</label>
     <textarea
@@ -24,6 +25,58 @@
     <p class="message">{{ answer() }}</p>
     @if (error()) {
       <p class="error">{{ error() }}</p>
+    }
+
+    <hr class="divider" />
+
+    <p class="label">ナレッジ文書</p>
+    <p class="hint">
+      アップロードした .md / .txt を検索対象に加えます（最大 1MB）。
+    </p>
+
+    @if (documents().length) {
+      <ul class="doc-list">
+        @for (doc of documents(); track doc.source) {
+          <li class="doc-item">
+            <span class="doc-name">{{ doc.source }}</span>
+            <span class="doc-chunks">{{ doc.chunks }} チャンク</span>
+            <button
+              type="button"
+              class="doc-remove"
+              (click)="removeDocument(doc.source)"
+            >
+              削除
+            </button>
+          </li>
+        }
+      </ul>
+    } @else {
+      <p class="hint">登録済みの文書はありません。</p>
+    }
+
+    <div class="upload-row">
+      <input
+        #fileInput
+        type="file"
+        accept=".md,.txt"
+        (change)="onFileSelected($event)"
+        [disabled]="isUploading()"
+      />
+      <button
+        type="button"
+        class="upload-btn"
+        (click)="upload()"
+        [disabled]="isUploading()"
+      >
+        @if (isUploading()) {
+          取り込み中...
+        } @else {
+          アップロード
+        }
+      </button>
+    </div>
+    @if (uploadStatus()) {
+      <p class="status">{{ uploadStatus() }}</p>
     }
   </section>
 </main>
