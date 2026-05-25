@@ -31,7 +31,7 @@
 
     <p class="label">ナレッジ文書</p>
     <p class="hint">
-      アップロードした .md / .txt を検索対象に加えます（最大 1MB）。
+      アップロードした .md / .txt / .pdf を検索対象に加えます（最大 10MB）。
     </p>
 
     @if (documents().length) {
@@ -58,7 +58,7 @@
       <input
         #fileInput
         type="file"
-        accept=".md,.txt"
+        accept=".md,.txt,.pdf"
         (change)="onFileSelected($event)"
         [disabled]="isUploading()"
       />

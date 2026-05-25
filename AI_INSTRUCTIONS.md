@@ -9,7 +9,7 @@ The app is a working **single-turn RAG chatbot** (no streaming, no conversation 
 - `POST /api/chat` (NestJS) calls an OpenAI-compatible `chat/completions` (LM Studio) and injects retrieved context when available.
 - RAG layer in `backend/src/rag/`: embeddings via `/v1/embeddings`, char-based chunking, retrieval, and prompt injection.
 - Vector storage in **pgvector** (the `db` PostgreSQL service): `chunks` table with an HNSW cosine index, dimension auto-detected from the embedding model.
-- Document management: `GET / POST / DELETE /api/documents` (upload `.md` / `.txt` at runtime). The frontend has a "ナレッジ文書" section that lists, uploads, and deletes documents.
+- Document management: `GET / POST / DELETE /api/documents` (upload `.md` / `.txt` / `.pdf` at runtime; PDF text is extracted via `pdf-parse`). The frontend has a "ナレッジ文書" section that lists, uploads, and deletes documents. Verified with a real selectable-text PDF in `backend/docs/test-jp-rag-20260526.pdf`.
 - Knowledge sources: bundled `backend/docs/` (ingested at startup) plus uploaded documents (persist across restarts via the `pgdata` volume).
 - Models: chat `openai/gpt-oss-20b`, embedding `text-embedding-bge-m3` (1024-dim, chosen for Japanese retrieval quality).
 

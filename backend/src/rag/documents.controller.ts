@@ -11,9 +11,10 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { EmbeddingService } from './embedding.service';
 import { IngestService } from './ingest.service';
+import { extractPdfText } from './pdf.util';
 import { SourceSummary, VectorStoreService } from './vector-store.service';
 
-const MAX_UPLOAD_BYTES = 1_000_000;
+const MAX_UPLOAD_BYTES = 10_000_000;
 
 /**
  * 文書管理 API。RAG の知識ソースを実行時に追加・確認・削除する。
@@ -47,16 +48,29 @@ export class DocumentsController {
     if (!file) {
       throw new BadRequestException('file が見つかりません。');
     }
-    if (!/\.(md|txt)$/i.test(file.originalname)) {
-      throw new BadRequestException('対応形式は .md / .txt のみです。');
+    if (!/\.(md|txt|pdf)$/i.test(file.originalname)) {
+      throw new BadRequestException('対応形式は .md / .txt / .pdf のみです。');
     }
 
-    const content = file.buffer.toString('utf-8');
+    const content = await this.extractContent(file);
     const chunks = await this.ingestService.ingestText(
       file.originalname,
       content,
     );
     return { source: file.originalname, chunks };
+  }
+
+  private async extractContent(file: Express.Multer.File): Promise<string> {
+    if (/\.pdf$/i.test(file.originalname)) {
+      const text = await extractPdfText(file.buffer);
+      if (!text) {
+        throw new BadRequestException(
+          'PDF からテキストを抽出できませんでした（画像 PDF の可能性）。',
+        );
+      }
+      return text;
+    }
+    return file.buffer.toString('utf-8');
   }
 
   @Delete(':source')

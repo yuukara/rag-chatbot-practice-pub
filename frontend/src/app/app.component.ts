@@ -110,7 +110,7 @@ export class AppComponent implements OnInit {
       },
       error: () => {
         this.uploadStatus.set(
-          'アップロードに失敗しました（.md / .txt のみ、最大 1MB）。',
+          'アップロードに失敗しました（.md / .txt / .pdf、最大 10MB。画像 PDF は不可）。',
         );
         this.isUploading.set(false);
       },

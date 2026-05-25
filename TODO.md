@@ -295,6 +295,68 @@ LLM 単体チャットの次の段階。既存の `POST /api/chat` を壊さず�
 - LM Studio 側に埋め込みモデルをロードできるか(できなければ埋め込み手段を別途決める)
 - ingest を起動時固定にするか、明示エンドポイント化するか
 
+## PDF 対応（実装済み・2026-05-25）
+
+`.md` / `.txt` に加えて PDF をアップロード・取り込みできるようにした。
+方針は **「PDF → テキスト抽出 → 既存の `ingestText()` に渡す」**。抽出層を 1 つ足すだけで、chunk / embed / 保存の経路はそのまま再利用している。
+
+### 実装状況
+
+- `backend/src/rag/pdf.util.ts`: `extractPdfText(buffer)`。`pdf-parse` を使用
+- **pdfjs バージョン注意**: pdf-parse 既定の pdfjs `v1.10.100` は古く、一部 PDF で "bad XRef entry" になる。同梱の **`v2.0.550`** を明示指定して回避（`{ version: 'v2.0.550' }`）。実在の PDF（Chrome / Word 等）は問題なし
+- アップロード API・起動時取り込みとも `.pdf` を許可し、md/txt は utf-8、pdf は抽出に分岐。抽出が空（画像 PDF）なら 400
+- サイズ上限 10MB（multer）＋ nginx `client_max_body_size 10m`
+- フロントは `accept=".md,.txt,.pdf"`、ヒント/エラー文を更新
+- 検証: テキスト PDF をアップロード→「コードネーム」「期限」とも正答／非対応拡張子は 400／既存 md・一般質問の回帰OK／削除OK
+- 実機確認: `backend/docs/test-jp-rag-20260526.pdf` を取り込み、`青い柿` と `2026年12月24日` を質問で取得できることを確認
+
+### 設計メモ（実装前の検討内容）
+
+### ライブラリ
+
+- 第一候補: `pdf-parse`（pdfjs ベース、buffer からテキスト抽出、導入が簡単）
+- 注意: `require('pdf-parse')` の index に debug 用コードがあるため、`pdf-parse/lib/pdf-parse.js` を直接 import するのが無難
+- スキャン（画像）PDF はテキストが取れない → OCR が必要。OCR（tesseract 等）は今回スコープ外
+
+### 実装手順
+
+1. 依存追加: `pdf-parse`（型が必要なら `@types/pdf-parse`）
+2. 抽出ユーティリティ `backend/src/rag/pdf.util.ts`: `extractPdfText(buffer): Promise<string>`。抽出結果が空のときは呼び出し側で「画像 PDF の可能性」を判定できるよう、空文字を返す
+3. アップロード API（`documents.controller.ts`）:
+   - 拡張子バリデーションに `.pdf` を許可
+   - ファイル種別で分岐: `.md` / `.txt` は `buffer.toString('utf-8')`、`.pdf` は `extractPdfText(buffer)` → どちらも `ingestService.ingestText(source, text)` へ
+   - 抽出結果が空なら 400「テキストを抽出できませんでした（画像 PDF の可能性）」
+   - サイズ上限の見直し（PDF は大きくなりがち。現在 1MB → 例 10MB）。**あわせて nginx の `client_max_body_size`（既定 1MB）も引き上げる**こと（しないと大きい PDF は nginx で 413 になる）
+4. 起動時 `docs/` 取り込み（`ingest.service.ts`）:
+   - `listDocumentFiles()` のフィルタに `.pdf` を追加
+   - 読み込みを分岐（テキストは utf-8 読み、PDF は buffer 読み → 抽出）
+5. テキスト整形:
+   - 改行・ページ跨ぎ・ハイフネーションの正規化。まずは既存 `chunk.util` の正規化に任せ、必要なら抽出側で軽く整える
+6. フロント（`app.component`）:
+   - ファイル入力を `accept=".md,.txt,.pdf"` に変更
+   - ヒント文・エラーメッセージに PDF を反映（抽出不可時の表示も）
+7. ドキュメント更新: README（対応形式・サイズ上限・nginx 注意）、CLAUDE.md（RAG レイヤに PDF 抽出を追記）、AI_INSTRUCTIONS の Current State
+
+### 検証
+
+- テキストベースの PDF をアップロード → 内容を質問して回答できる
+- 画像（スキャン）PDF → 「抽出できない」旨が返る
+- 既存の `.md` / `.txt` が引き続き動く（回帰）
+- サイズ上限超の PDF → 想定どおり拒否（API 側と nginx 側の両方を確認）
+
+### 決定事項（2026-05-25）
+
+- **ライブラリ**: `pdf-parse` を採用（buffer から抽出、導入が最小）。`pdf-parse/lib/pdf-parse.js` を直接 import
+- **サイズ上限**: API（multer）10MB かつ nginx `client_max_body_size 10m`（両方を揃える）
+- **OCR（画像 PDF）**: 今回はスコープ外。抽出結果が空なら 400 で「抽出できない」旨を返す
+- **チャンク設定**: 現状の `RAG_CHUNK_SIZE=300` / `RAG_CHUNK_OVERLAP=60` を流用（PDF 特有のノイズ除去が要れば抽出側で対応）
+- **検証 PDF**: selectable-text の PDF は通る。`backend/docs/test-jp-rag-20260526.pdf` は `pdf-parse` で本文抽出でき、RAG でも質問応答できた
+
+### スコープ外
+
+- OCR（画像 PDF）、docx / pptx などの他形式
+- 表・図・レイアウトの構造化抽出
+
 ## 実装時の補足
 
 最初から複雑にしない。

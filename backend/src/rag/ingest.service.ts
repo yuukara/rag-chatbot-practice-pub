@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { readdir, readFile } from 'fs/promises';
 import { join, resolve } from 'path';
 import { chunkText } from './chunk.util';
+import { extractPdfText } from './pdf.util';
 import { EmbeddingService } from './embedding.service';
 import { VectorStoreService } from './vector-store.service';
 
@@ -89,7 +90,11 @@ export class IngestService implements OnModuleInit {
 
     let total = 0;
     for (const file of files) {
-      const content = await readFile(join(this.docsDir, file), 'utf-8');
+      const content = await this.readDocument(file);
+      if (!content) {
+        this.logger.warn(`テキストを抽出できませんでした(スキップ): ${file}`);
+        continue;
+      }
       total += await this.ingestText(file, content);
     }
     this.logger.log(
@@ -97,10 +102,18 @@ export class IngestService implements OnModuleInit {
     );
   }
 
+  private async readDocument(file: string): Promise<string> {
+    const filePath = join(this.docsDir, file);
+    if (/\.pdf$/i.test(file)) {
+      return extractPdfText(await readFile(filePath));
+    }
+    return readFile(filePath, 'utf-8');
+  }
+
   private async listDocumentFiles(): Promise<string[]> {
     try {
       const entries = await readdir(this.docsDir);
-      return entries.filter((name) => /\.(md|txt)$/i.test(name)).sort();
+      return entries.filter((name) => /\.(md|txt|pdf)$/i.test(name)).sort();
     } catch {
       this.logger.warn(`docs ディレクトリを開けません: ${this.docsDir}`);
       return [];
