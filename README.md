@@ -4,6 +4,19 @@ Angular と NestJS を Docker Compose で起動する、RAG chatbot 開発用の
 OpenAI 互換 API（ローカルの LM Studio を想定）に質問を送り、回答を画面に表示します。
 さらに `backend/docs/` に置いたドキュメントを検索して回答に反映する、最小構成の **RAG（検索拡張生成）** を実装しています。
 
+## 利用ガイド
+
+このアプリは、`LM Studio` でモデルを準備してから、`docker compose` で全体を起動し、最後にブラウザで操作します。
+
+1. `LM Studio` でチャット用モデルと埋め込み用モデルをロードし、API サーバーを起動する
+2. リポジトリ直下で `docker compose up --build` を実行する
+3. `http://localhost:8080` を開いて、質問送信や文書アップロードを行う
+
+補足:
+- `http://localhost:3000` は backend の直通確認用
+- `http://localhost:8080` は ブラウザから使う本番経路
+- `backend/docs/` に PDF を置くと、起動時に自動で取り込まれる
+
 ## 構成
 
 - `frontend`: Angular アプリ。質問を送って回答を表示する単一画面。ビルド後は nginx で配信し、`/api/` をバックエンドにプロキシします。
