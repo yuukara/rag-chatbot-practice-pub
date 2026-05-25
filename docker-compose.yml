@@ -1,4 +1,18 @@
 services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-rag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-ragpass}
+      POSTGRES_DB: ${POSTGRES_DB:-ragdb}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-rag} -d ${POSTGRES_DB:-ragdb}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   backend:
     build:
       context: ./backend
@@ -6,6 +20,18 @@ services:
       - "3000:3000"
     environment:
       NODE_ENV: production
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-http://host.docker.internal:1234/v1}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-lm-studio}
+      OPENAI_MODEL: ${OPENAI_MODEL:-local-model}
+      OPENAI_MAX_TOKENS: ${OPENAI_MAX_TOKENS:-128}
+      OPENAI_EMBEDDING_MODEL: ${OPENAI_EMBEDDING_MODEL:-}
+      RAG_TOP_K: ${RAG_TOP_K:-4}
+      RAG_CHUNK_SIZE: ${RAG_CHUNK_SIZE:-300}
+      RAG_CHUNK_OVERLAP: ${RAG_CHUNK_OVERLAP:-60}
+      DATABASE_URL: ${DATABASE_URL:-postgres://rag:ragpass@db:5432/ragdb}
+    depends_on:
+      db:
+        condition: service_healthy
 
   frontend:
     build:
@@ -15,3 +41,5 @@ services:
     depends_on:
       - backend
 
+volumes:
+  pgdata:

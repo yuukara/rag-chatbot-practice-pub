@@ -1,8 +1,27 @@
 <main class="shell">
   <section class="panel" aria-labelledby="page-title">
-    <p class="label">Backend response</p>
+    <p class="label">Local LLM Chat</p>
     <h1 id="page-title">RAG Chatbot Practice</h1>
-    <p class="message">{{ message() }}</p>
+    <p class="description">
+      まずは LM Studio などの OpenAI-compatible API に質問を送り、応答を返す段階です。
+    </p>
+    <label class="field" for="prompt">質問</label>
+    <textarea
+      id="prompt"
+      name="prompt"
+      rows="5"
+      [(ngModel)]="prompt"
+      [disabled]="isLoading()"
+    ></textarea>
+    <button type="button" (click)="submit()" [disabled]="isLoading()">
+      @if (isLoading()) {
+        送信中...
+      } @else {
+        質問を送る
+      }
+    </button>
+    <p class="field">AI の応答</p>
+    <p class="message">{{ answer() }}</p>
     @if (error()) {
       <p class="error">{{ error() }}</p>
     }
