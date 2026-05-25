@@ -18,9 +18,9 @@ export class RagService {
     this.topK = Number(process.env.RAG_TOP_K ?? '4');
   }
 
-  /** インデックスにチャンクがあり、検索可能な状態か。 */
+  /** 検索可能な状態か(埋め込みモデルが有効か)。チャンク未取り込み時は検索が空配列を返す。 */
   isReady(): boolean {
-    return this.embeddingService.isEnabled() && this.vectorStore.size > 0;
+    return this.embeddingService.isEnabled();
   }
 
   async retrieve(query: string): Promise<SearchResult[]> {

@@ -102,6 +102,7 @@ docker compose down
 | `RAG_CHUNK_SIZE` | `300` | チャンクの文字数 |
 | `RAG_CHUNK_OVERLAP` | `60` | チャンク間のオーバーラップ文字数 |
 | `DATABASE_URL` | `postgres://rag:ragpass@db:5432/ragdb` | pgvector(PostgreSQL)の接続先 |
+| `RAG_RESET` | `false` | `true` で起動時に `chunks` テーブルを作り直す（埋め込みモデル/次元を変えたとき用） |
 
 DB の認証情報は `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB`（既定: `rag` / `ragpass` / `ragdb`）で変更できます。変更時は `DATABASE_URL` も合わせてください。PostgreSQL はコンテナとして自動起動するので、別途インストールは不要です。
 
@@ -127,12 +128,31 @@ DB の認証情報は `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB`（�
 { "message": "RAG は Retrieval-Augmented Generation の略です。" }
 ```
 
+### 文書管理 API
+
+RAG の知識ソースを実行時に追加・確認・削除できます（`.md` / `.txt`、最大 1MB）。
+
+```bash
+# 一覧（source とチャンク数）
+curl http://localhost:8080/api/documents
+
+# アップロード（その場で取り込み）
+curl -X POST http://localhost:8080/api/documents -F "file=@./note.md"
+#=> {"source":"note.md","chunks":2}
+
+# 削除
+curl -X DELETE http://localhost:8080/api/documents/note.md
+#=> {"source":"note.md","deleted":2}
+```
+
+アップロードした文書は pgvector に保存され、**再起動をまたいで残ります**。同名で再アップロードすると置き換えられます。
+
 ## RAG の仕組み
 
 1. **起動時（ingest）**: `backend/docs/` の `.md` / `.txt` を読み込み、文字数ベースでチャンク分割し、埋め込みモデルでベクトル化して **pgvector の `chunks` テーブル**に保存します（埋め込み次元はモデルから自動検出し、HNSW インデックスを作成）。
 2. **質問時（retrieve）**: 質問をベクトル化し、pgvector のコサイン距離（`<=>`）で関連チャンクを `RAG_TOP_K` 件取得します。
 3. **生成**: 取得したチャンクを「参考情報」としてプロンプトに差し込み、チャットモデルに回答させます。
 
-ベクトルの保存・検索は pgvector（PostgreSQL 拡張）で行います。`chunks` テーブルは起動時に作り直して現在の `docs/` と埋め込みモデルに追従するため、ドキュメントを追加・変更したら再ビルド・再起動してください（`docs/` はイメージに同梱されます）。DB データは `pgdata` ボリュームに保存されます。
+ベクトルの保存・検索は pgvector（PostgreSQL 拡張）で行います。起動時はテーブルを丸ごと消さず、**同梱の `docs/` 各ファイルだけを source 単位で取り込み直し**ます。そのため `docs/` の編集を反映するには再ビルド・再起動が必要ですが（`docs/` はイメージ同梱）、アップロードした文書は別 source として `pgdata` ボリュームに残ります。埋め込みモデル（次元）を変えたときは `RAG_RESET=true` で起動して作り直してください。
 
 埋め込みモデルが未設定、`docs/` が空、検索に失敗した場合は、RAG なしの単発チャットとして動作します。

@@ -230,10 +230,57 @@ LLM 単体チャットの次の段階。既存の `POST /api/chat` を壊さず�
 - インターフェイスを保ったため `IngestService` / `RagService` の変更は最小(search が async 化した程度)
 - 確認済み: 拡張 vector 0.8.2 / `chunks` 9 行 / `vector(1024)` / HNSW、(A)1024・(B)NestJS・(C)一般質問とも正常
 
-### 次の改善候補（任意）
+## 文書アップロード機能の設計（バックエンド実装済み / フロント UI は次）
 
-- 一般質問でも低スコアのチャンクが毎回プロンプトに差し込まれている。`RAG_TOP_K` に加えて**類似度しきい値**を設け、上位スコアが低いときは参考情報を注入しない（純粋な単発チャットに戻す）と無駄が減る
-- 起動時の DROP/再 ingest をやめ、内容ハッシュ等で差分更新する（再起動のたびに再 embedding しない）
+ブラウザからファイルをアップロードして RAG の知識を増やせるようにする。
+現状は `docs/` をイメージ同梱・起動時一括 ingest のみなので、「ビルド時固定 → 実行時取り込み」へ広げる。
+**バックエンドは実装・検証済み**（下記）。次はフロントの UI。
+
+### バックエンド実装状況（2026-05-25 完了）
+
+- `POST/GET/DELETE /api/documents` を実装（`DocumentsController`）
+- `VectorStoreService` を `ensureSchema`/`add`/`deleteBySource`/`listSources`/`search`/`dropTable` に再構成。テーブル未作成でも検索は空配列を返す
+- `IngestService.ingestText(source, content)` を共通化し、起動時 ingest とアップロードで再利用
+- 起動時は DROP せず `docs/` を source 単位で置き換え取り込み → アップロード文書は再起動後も残る（検証済み）
+- `RAG_RESET=true` で起動時にテーブルを作り直す（次元変更時）
+- 検証: アップロード→質問で回答／再起動後も保持／DELETE で削除→以後は回答不可／一般質問の回帰OK
+
+### 方針の要点
+
+- 既存の `POST /api/chat` と単発チャットは壊さない。RAG 無効時の後方互換も維持
+- pgvector の `chunks` テーブルを**起動時に DROP しない**運用へ変更（アップロード分が再起動で消えないように）
+- ingest 処理を再利用可能にして、起動時の `docs/` 取り込みとアップロードの両方で使う
+
+### テーブルのライフサイクル変更
+
+- `reset()`（DROP+CREATE）→ `ensureSchema(dim)`（`CREATE TABLE/INDEX IF NOT EXISTS`）へ。起動のたびに消さない
+- 起動時は **`docs/` の各ファイルだけ「source 単位で delete → 再 ingest」**（同名は置き換え）。`docs/` の編集は反映され、アップロード由来の source は触らないので残る
+- モデル変更で埋め込み次元が変わった場合の作り直し用に `RAG_RESET=true` を用意（起動時に一度だけ DROP）
+
+### API（バックエンド）
+
+- `POST /api/documents`（multipart, フィールド `file`）: `.md` / `.txt` を受け取り chunk → embed → 該当 source を置き換えで保存。応答 `{ source, chunks }`
+- `GET /api/documents`: 取り込み済み source 一覧（`{ source, chunks }[]`）。後続の UI 用
+- `DELETE /api/documents/:source`: 指定 source のチャンクを削除。応答 `{ source, deleted }`
+- 検証: 拡張子 `.md`/`.txt` のみ、埋め込みモデル未設定なら 400、サイズ上限を設定
+
+### サービス構成（`backend/src/rag/`）
+
+- `VectorStoreService`: `ensureSchema(dim)` / `add` / `deleteBySource` / `listSources` / `search`（テーブル未作成時は空配列で耐える）/ `dropTable`
+- `IngestService`: 共通の `ingestText(source, content)` を持ち、起動時ループとアップロードの両方から呼ぶ
+- `DocumentsController`: 上記 API を担当（`RagModule` に登録）
+
+### スコープ外（この回はやらない）
+
+- フロントのアップロード UI（次の回）
+- PDF / docx などのパーサ（まずは `.md`/`.txt`）
+- 原本ファイルの保持（今はベクトルのみ保存。再 embedding 用に原本を持つのは後続）
+- 内容ハッシュによる差分判定（今は起動時に `docs/` を毎回置き換え。コストは同梱数本のみで許容）
+
+### 既存の改善候補（任意・継続）
+
+- 一般質問でも低スコアのチャンクが毎回プロンプトに差し込まれている。**類似度しきい値**で上位スコアが低いときは注入しない
+- 起動時の `docs/` 再 ingest を内容ハッシュで差分化（毎回 re-embedding しない）
 - チャンク境界を見出し/段落で尊重する分割への改良
 
 ### 未決事項 / 確認したいこと

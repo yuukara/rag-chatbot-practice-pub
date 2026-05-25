@@ -20,6 +20,7 @@
   "devDependencies": {
     "@nestjs/cli": "^11.0.21",
     "@nestjs/schematics": "^11.1.0",
+    "@types/multer": "^1.4.12",
     "@types/node": "^20.17.6",
     "@types/pg": "^8.11.10",
     "source-map-support": "^0.5.21",

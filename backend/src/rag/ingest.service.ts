@@ -3,12 +3,15 @@ import { readdir, readFile } from 'fs/promises';
 import { join, resolve } from 'path';
 import { chunkText } from './chunk.util';
 import { EmbeddingService } from './embedding.service';
-import { StoredChunk, VectorStoreService } from './vector-store.service';
+import { VectorStoreService } from './vector-store.service';
 
 /**
- * 起動時に docs/ を読み込み、チャンク分割 → 埋め込み → ベクトルストアへ保存する。
- * 埋め込みモデル未設定や docs 無し・失敗時は RAG を無効のままにし、
- * 既存の単発チャットはそのまま動く（後方互換）。
+ * 文書の取り込み(ingest)を担う。
+ * - 起動時: `docs/` の各ファイルを source 単位で置き換え取り込み(編集を反映、他 source は保持)
+ * - 実行時: `ingestText()` をアップロード API からも再利用
+ *
+ * 埋め込みモデル未設定・docs 無し・失敗時は RAG を無効のままにし、
+ * 既存の単発チャットはそのまま動く(後方互換)。
  */
 @Injectable()
 export class IngestService implements OnModuleInit {
@@ -31,13 +34,17 @@ export class IngestService implements OnModuleInit {
   async onModuleInit(): Promise<void> {
     if (!this.embeddingService.isEnabled()) {
       this.logger.warn(
-        'OPENAI_EMBEDDING_MODEL が未設定のため RAG を無効化します（チャットは通常動作）。',
+        'OPENAI_EMBEDDING_MODEL が未設定のため RAG を無効化します(チャットは通常動作)。',
       );
       return;
     }
 
     try {
-      await this.ingest();
+      if (process.env.RAG_RESET === 'true') {
+        await this.vectorStore.dropTable();
+        this.logger.warn('RAG_RESET=true: chunks テーブルを作り直します。');
+      }
+      await this.ingestDocsDir();
     } catch (error) {
       this.logger.error(
         'ドキュメントの取り込みに失敗しました。RAG なしでチャットを継続します。',
@@ -46,43 +53,47 @@ export class IngestService implements OnModuleInit {
     }
   }
 
-  private async ingest(): Promise<void> {
+  /** 1 文書を取り込む(同名 source は置き換え)。取り込んだチャンク数を返す。 */
+  async ingestText(source: string, content: string): Promise<number> {
+    const texts = chunkText(content, this.chunkSize, this.chunkOverlap);
+    if (texts.length === 0) {
+      await this.vectorStore.deleteBySource(source);
+      return 0;
+    }
+
+    const vectors = await this.embeddingService.embed(texts);
+    const dimensions = vectors[0]?.length ?? 0;
+    if (dimensions === 0) {
+      throw new Error('埋め込みベクトルが空です。');
+    }
+
+    await this.vectorStore.ensureSchema(dimensions);
+    await this.vectorStore.deleteBySource(source);
+    await this.vectorStore.add(
+      texts.map((text, chunkIndex) => ({
+        source,
+        chunkIndex,
+        text,
+        vector: vectors[chunkIndex],
+      })),
+    );
+    return texts.length;
+  }
+
+  private async ingestDocsDir(): Promise<void> {
     const files = await this.listDocumentFiles();
     if (files.length === 0) {
       this.logger.warn(`取り込み対象のドキュメントがありません: ${this.docsDir}`);
       return;
     }
 
-    const pending: Array<Omit<StoredChunk, 'vector'>> = [];
+    let total = 0;
     for (const file of files) {
       const content = await readFile(join(this.docsDir, file), 'utf-8');
-      chunkText(content, this.chunkSize, this.chunkOverlap).forEach(
-        (text, chunkIndex) => {
-          pending.push({ source: file, chunkIndex, text });
-        },
-      );
+      total += await this.ingestText(file, content);
     }
-
-    if (pending.length === 0) {
-      this.logger.warn('チャンクが生成されませんでした。');
-      return;
-    }
-
-    const vectors = await this.embeddingService.embed(
-      pending.map((chunk) => chunk.text),
-    );
-    const dimensions = vectors[0]?.length ?? 0;
-    if (dimensions === 0) {
-      this.logger.warn('埋め込みベクトルが空のため取り込みを中止します。');
-      return;
-    }
-
-    await this.vectorStore.reset(dimensions);
-    await this.vectorStore.add(
-      pending.map((chunk, i) => ({ ...chunk, vector: vectors[i] })),
-    );
     this.logger.log(
-      `RAG インデックス作成完了: ${files.length} ファイル / ${pending.length} チャンク (${dimensions} 次元, pgvector)`,
+      `RAG インデックス作成完了: ${files.length} ファイル / ${total} チャンク (pgvector)`,
     );
   }
 

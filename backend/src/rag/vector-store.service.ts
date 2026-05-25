@@ -19,16 +19,22 @@ export type SearchResult = {
   score: number;
 };
 
+export type SourceSummary = {
+  source: string;
+  chunks: number;
+};
+
+const UNDEFINED_TABLE = '42P01';
+
 /**
  * pgvector(PostgreSQL 拡張)を使うベクトルストア。
  * チャンクを `chunks` テーブルに保存し、コサイン距離(`<=>`)で類似検索する。
- * size はメモリ上のカウントで保持し、isReady の同期判定に使う。
+ * テーブルは起動時に消さず、source 単位の追加・削除で運用する。
  */
 @Injectable()
 export class VectorStoreService {
   private readonly logger = new Logger(VectorStoreService.name);
   private readonly pool: Pool;
-  private count = 0;
 
   constructor() {
     this.pool = new Pool({
@@ -41,19 +47,11 @@ export class VectorStoreService {
     );
   }
 
-  get size(): number {
-    return this.count;
-  }
-
-  /**
-   * 拡張とテーブルを用意し直す。埋め込み次元をモデルに合わせて受け取り、
-   * 毎起動で作り直して docs / モデル変更に追従する。
-   */
-  async reset(dimensions: number): Promise<void> {
+  /** 拡張・テーブル・インデックスを用意する(存在すれば何もしない)。 */
+  async ensureSchema(dimensions: number): Promise<void> {
     await this.pool.query('CREATE EXTENSION IF NOT EXISTS vector');
-    await this.pool.query('DROP TABLE IF EXISTS chunks');
     await this.pool.query(
-      `CREATE TABLE chunks (
+      `CREATE TABLE IF NOT EXISTS chunks (
          id serial PRIMARY KEY,
          source text NOT NULL,
          chunk_index int NOT NULL,
@@ -62,9 +60,13 @@ export class VectorStoreService {
        )`,
     );
     await this.pool.query(
-      'CREATE INDEX chunks_embedding_idx ON chunks USING hnsw (embedding vector_cosine_ops)',
+      'CREATE INDEX IF NOT EXISTS chunks_embedding_idx ON chunks USING hnsw (embedding vector_cosine_ops)',
     );
-    this.count = 0;
+  }
+
+  /** テーブルを破棄する(モデル/次元変更時の作り直し用)。 */
+  async dropTable(): Promise<void> {
+    await this.pool.query('DROP TABLE IF EXISTS chunks');
   }
 
   async add(chunks: StoredChunk[]): Promise<void> {
@@ -79,7 +81,6 @@ export class VectorStoreService {
         );
       }
       await client.query('COMMIT');
-      this.count += chunks.length;
     } catch (error) {
       await client.query('ROLLBACK');
       throw error;
@@ -88,30 +89,81 @@ export class VectorStoreService {
     }
   }
 
+  /** 指定 source のチャンクを削除し、削除件数を返す。 */
+  async deleteBySource(source: string): Promise<number> {
+    try {
+      const result = await this.pool.query(
+        'DELETE FROM chunks WHERE source = $1',
+        [source],
+      );
+      return result.rowCount ?? 0;
+    } catch (error) {
+      if (isUndefinedTable(error)) {
+        return 0;
+      }
+      throw error;
+    }
+  }
+
+  /** 取り込み済みの source とチャンク数の一覧。 */
+  async listSources(): Promise<SourceSummary[]> {
+    try {
+      const result = await this.pool.query(
+        `SELECT source, count(*)::int AS chunks
+         FROM chunks GROUP BY source ORDER BY source`,
+      );
+      return result.rows.map((row) => ({
+        source: row.source,
+        chunks: row.chunks,
+      }));
+    } catch (error) {
+      if (isUndefinedTable(error)) {
+        return [];
+      }
+      throw error;
+    }
+  }
+
   /** queryVector に近いチャンクを上位 topK 件返す(score はコサイン類似度)。 */
   async search(queryVector: number[], topK: number): Promise<SearchResult[]> {
-    if (this.count === 0 || queryVector.length === 0) {
+    if (queryVector.length === 0) {
       return [];
     }
-    const result = await this.pool.query(
-      `SELECT source, chunk_index, content, 1 - (embedding <=> $1::vector) AS score
-       FROM chunks
-       ORDER BY embedding <=> $1::vector
-       LIMIT $2`,
-      [toVectorLiteral(queryVector), topK],
-    );
-    return result.rows.map((row) => ({
-      chunk: {
-        source: row.source,
-        chunkIndex: row.chunk_index,
-        text: row.content,
-      },
-      score: Number(row.score),
-    }));
+    try {
+      const result = await this.pool.query(
+        `SELECT source, chunk_index, content, 1 - (embedding <=> $1::vector) AS score
+         FROM chunks
+         ORDER BY embedding <=> $1::vector
+         LIMIT $2`,
+        [toVectorLiteral(queryVector), topK],
+      );
+      return result.rows.map((row) => ({
+        chunk: {
+          source: row.source,
+          chunkIndex: row.chunk_index,
+          text: row.content,
+        },
+        score: Number(row.score),
+      }));
+    } catch (error) {
+      if (isUndefinedTable(error)) {
+        return [];
+      }
+      throw error;
+    }
   }
 }
 
 /** number[] を pgvector のテキスト表現 `[v1,v2,...]` に変換する。 */
 function toVectorLiteral(vector: number[]): string {
   return `[${vector.join(',')}]`;
+}
+
+/** まだ ingest 前でテーブルが無いケースを判定する。 */
+function isUndefinedTable(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    (error as { code?: string }).code === UNDEFINED_TABLE
+  );
 }
